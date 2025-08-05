@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Filtering Playground</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .canvas-wrapper {
+            background-color: #e5e7eb; /* gray-200 */
+            aspect-ratio: 1 / 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05);
+            width: 100%;
+            max-width: 512px;
+        }
+        canvas, video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        .active-btn {
+            --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+            --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(3px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+            box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
+        }
+        #filter-params-container {
+            transition: opacity 0.3s, max-height 0.3s;
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+        }
+        #filter-params-container.visible {
+            max-height: 100px; /* Or enough height to show content */
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen bg-gray-100 overflow-hidden">
+
+    <header class="bg-white p-3 shadow-md w-full z-10">
+        <div class="container mx-auto">
+            <div class="flex items-center flex-wrap gap-4">
+                <h1 class="text-xl font-bold text-gray-800 hidden sm:block">Image Filtering Playground</h1>
+                <div class="flex-grow"></div>
+                <div class="flex items-center gap-3">
+                    <button id="use-upload-btn" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 focus:outline-none ring-blue-500 ring-offset-2 transition-all duration-200">
+                        Upload Image
+                    </button>
+                    <button id="use-webcam-btn" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 focus:outline-none ring-green-500 ring-offset-2 transition-all duration-200">
+                        Use Webcam
+                    </button>
+                    <input type="file" id="image-upload" class="hidden" accept="image/png, image/jpeg">
+                </div>
+                 <div id="status" class="text-sm text-gray-600 font-medium">Select a source to begin.</div>
+            </div>
+
+            <div class="mt-3 space-y-3">
+                <div class="flex items-center flex-wrap gap-4">
+                    <label for="filter-select" class="text-sm font-medium text-gray-700">Choose a filter:</label>
+                    <select id="filter-select" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2">
+                        <option value="identity">Identity</option>
+                        <option value="sharpen">Sharpen</option>
+                        <option value="box-blur">Box Blur</option>
+                        <option value="gaussian-blur">Gaussian Blur</option>
+                        <option value="edge-detect">Edge Detection</option>
+                        <option value="emboss">Emboss</option>
+                    </select>
+                </div>
+                <!-- Parameter controls container -->
+                <div id="filter-params-container" class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                    <label id="param-label" for="param-slider" class="text-sm font-medium text-gray-700">Parameter:</label>
+                    <input type="range" id="param-slider" class="w-48">
+                    <span id="param-value" class="text-sm font-semibold w-12 text-left text-gray-800"></span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-grow p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-center justify-items-center overflow-auto">
+        <div class="w-full flex flex-col items-center">
+            <h3 class="text-lg font-semibold text-center mb-3 text-gray-700">Original</h3>
+            <div class="canvas-wrapper">
+                <video id="webcam-video" class="hidden" autoplay playsinline></video>
+                <canvas id="sourceCanvas"></canvas>
+            </div>
+        </div>
+        <div class="w-full flex flex-col items-center">
+            <h3 class="text-lg font-semibold text-center mb-3 text-gray-700">Filtered</h3>
+            <div class="canvas-wrapper">
+                <canvas id="filteredCanvas"></canvas>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- DOM Elements ---
+        const useUploadBtn = document.getElementById('use-upload-btn');
+        const useWebcamBtn = document.getElementById('use-webcam-btn');
+        const imageUpload = document.getElementById('image-upload');
+        const statusEl = document.getElementById('status');
+        const webcamVideo = document.getElementById('webcam-video');
+        const sourceCanvas = document.getElementById('sourceCanvas');
+        const filteredCanvas = document.getElementById('filteredCanvas');
+        const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+        const filteredCtx = filteredCanvas.getContext('2d');
+        const filterSelect = document.getElementById('filter-select');
+        const filterParamsContainer = document.getElementById('filter-params-container');
+        const paramLabel = document.getElementById('param-label');
+        const paramSlider = document.getElementById('param-slider');
+        const paramValue = document.getElementById('param-value');
+
+        // --- Constants & State ---
+        const CANVAS_SIZE = 512;
+        sourceCanvas.width = sourceCanvas.height = CANVAS_SIZE;
+        filteredCanvas.width = filteredCanvas.height = CANVAS_SIZE;
+
+        let currentMode = null; // 'upload' or 'webcam'
+        let webcamStream = null;
+        let sourceImage = new Image();
+        let isProcessing = false;
+        let animationFrameId = null;
+        let isImageLoaded = false;
+
+        // --- Filter Definitions ---
+        const staticKernels = {
+            identity: [ [0, 0, 0], [0, 1, 0], [0, 0, 0] ],
+            'box-blur': [ [1/9, 1/9, 1/9], [1/9, 1/9, 1/9], [1/9, 1/9, 1/9] ],
+            'edge-detect': [ [-1, -1, -1], [-1, 8, -1], [-1, -1, -1] ],
+            emboss: [ [-2, -1, 0], [-1, 1, 1], [0, 1, 2] ]
+        };
+
+        const filterParams = {
+            'sharpen': { label: 'Strength', min: 1, max: 10, step: 0.1, default: 5 },
+            'gaussian-blur': { label: 'Sigma', min: 0.5, max: 5, step: 0.1, default: 1.4 },
+            'edge-detect': { label: 'Multiplier', min: 1, max: 10, step: 0.1, default: 1 } // --- NEW: Parameter for edge detection
+        };
+
+        // --- Core Functions ---
+
+        function clearCanvas(context) {
+            context.fillStyle = '#e5e7eb';
+            context.fillRect(0, 0, context.canvas.width, context.canvas.height);
+        }
+
+        function setupMode(mode) {
+            currentMode = mode;
+            stopProcessingLoop();
+            isImageLoaded = false;
+            [useUploadBtn, useWebcamBtn].forEach(btn => btn.classList.remove('active-btn'));
+            
+            if (mode === 'upload') {
+                stopWebcam();
+                webcamVideo.classList.add('hidden');
+                sourceCanvas.classList.remove('hidden');
+                useUploadBtn.classList.add('active-btn');
+                statusEl.textContent = 'Select an image file to begin.';
+            } else if (mode === 'webcam') {
+                stopWebcam();
+                useWebcamBtn.classList.add('active-btn');
+                startWebcam();
+            }
+        }
+
+        function handleImageUpload(event) {
+            setupMode('upload');
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    sourceImage.src = e.target.result;
+                    sourceImage.onload = () => {
+                        isImageLoaded = true;
+                        drawSourceToCanvas(sourceImage);
+                        applySelectedFilter();
+                    };
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        async function startWebcam() {
+            try {
+                if (webcamStream) return;
+                statusEl.textContent = 'Requesting webcam...';
+                webcamStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                webcamVideo.srcObject = webcamStream;
+                webcamVideo.classList.remove('hidden');
+                sourceCanvas.classList.add('hidden');
+
+                webcamVideo.onloadedmetadata = () => {
+                    isImageLoaded = true;
+                    statusEl.textContent = 'Live filtering running...';
+                    isProcessing = true;
+                    processingLoop();
+                };
+            } catch (err) {
+                statusEl.textContent = 'Could not access webcam.';
+                console.error("Webcam Error:", err);
+                setupMode('upload');
+            }
+        }
+
+        function stopWebcam() {
+            if (webcamStream) {
+                webcamStream.getTracks().forEach(track => track.stop());
+                webcamStream = null;
+            }
+        }
+
+        function drawSourceToCanvas(source) {
+            clearCanvas(sourceCtx);
+            const sW = source.videoWidth || source.width;
+            const sH = source.videoHeight || source.height;
+            const r = Math.min(CANVAS_SIZE / sW, CANVAS_SIZE / sH);
+            const cX = (CANVAS_SIZE - sW * r) / 2;
+            const cY = (CANVAS_SIZE - sH * r) / 2;
+            sourceCtx.drawImage(source, 0, 0, sW, sH, cX, cY, sW * r, sH * r);
+        }
+
+        function processingLoop() {
+            if (!isProcessing) return;
+            drawSourceToCanvas(webcamVideo);
+            applySelectedFilter();
+            animationFrameId = requestAnimationFrame(processingLoop);
+        }
+
+        function stopProcessingLoop() {
+            isProcessing = false;
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+        }
+        
+        function generateKernel(filterName, param) {
+            switch(filterName) {
+                case 'sharpen':
+                    return [
+                        [ 0, -1,  0],
+                        [-1, param, -1],
+                        [ 0, -1,  0]
+                    ];
+                case 'gaussian-blur':
+                    const size = 3;
+                    const sigma = param;
+                    const kernel = Array(size).fill(0).map(() => Array(size).fill(0));
+                    const half = Math.floor(size / 2);
+                    let sum = 0;
+                    for (let y = 0; y < size; y++) {
+                        for (let x = 0; x < size; x++) {
+                            const exponent = -((x - half)**2 + (y - half)**2) / (2 * sigma**2);
+                            const value = (1 / (2 * Math.PI * sigma**2)) * Math.exp(exponent);
+                            kernel[y][x] = value;
+                            sum += value;
+                        }
+                    }
+                    return kernel.map(row => row.map(val => val / sum));
+                default:
+                    return staticKernels[filterName];
+            }
+        }
+
+        function applySelectedFilter() {
+            if (!isImageLoaded) {
+                clearCanvas(filteredCtx);
+                return;
+            }
+
+            statusEl.textContent = 'Applying filter...';
+            
+            const filterName = filterSelect.value;
+            const param = parseFloat(paramSlider.value);
+            const kernel = generateKernel(filterName, param);
+
+            // --- FIX: Use the slider value as a multiplier for edge detection, otherwise it's 1.
+            const multiplier = (filterName === 'edge-detect') ? param : 1;
+
+            const sourceImageData = sourceCtx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+            const filteredImageData = applyConvolution(sourceImageData, kernel, multiplier);
+            filteredCtx.putImageData(filteredImageData, 0, 0);
+            statusEl.textContent = 'Filter applied.';
+        }
+
+        // --- FIX: Added a multiplier parameter to brighten the result of the convolution.
+        function applyConvolution(srcData, kernel, multiplier = 1) {
+            const src = srcData.data;
+            const width = srcData.width;
+            const height = srcData.height;
+            const dstData = filteredCtx.createImageData(width, height);
+            const dst = dstData.data;
+            const kernelSize = kernel.length;
+            const halfKernel = Math.floor(kernelSize / 2);
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const dstOff = (y * width + x) * 4;
+                    let r = 0, g = 0, b = 0;
+
+                    for (let ky = 0; ky < kernelSize; ky++) {
+                        for (let kx = 0; kx < kernelSize; kx++) {
+                            const sy = y + ky - halfKernel;
+                            const sx = x + kx - halfKernel;
+
+                            if (sy >= 0 && sy < height && sx >= 0 && sx < width) {
+                                const srcOff = (sy * width + sx) * 4;
+                                const weight = kernel[ky][kx];
+                                r += src[srcOff] * weight;
+                                g += src[srcOff + 1] * weight;
+                                b += src[srcOff + 2] * weight;
+                            }
+                        }
+                    }
+                    dst[dstOff] = r * multiplier;
+                    dst[dstOff + 1] = g * multiplier;
+                    dst[dstOff + 2] = b * multiplier;
+                    dst[dstOff + 3] = 255; // Alpha
+                }
+            }
+            return dstData;
+        }
+
+        function updateFilterControls() {
+            const filterName = filterSelect.value;
+            const params = filterParams[filterName];
+
+            if (params) {
+                paramLabel.textContent = params.label + ':';
+                paramSlider.min = params.min;
+                paramSlider.max = params.max;
+                paramSlider.step = params.step;
+                paramSlider.value = params.default;
+                paramValue.textContent = params.default.toFixed(1);
+                filterParamsContainer.classList.add('visible');
+            } else {
+                filterParamsContainer.classList.remove('visible');
+            }
+            applySelectedFilter();
+        }
+
+        // --- Event Listeners and Initialization ---
+        useUploadBtn.addEventListener('click', () => imageUpload.click());
+        useWebcamBtn.addEventListener('click', () => setupMode('webcam'));
+        imageUpload.addEventListener('change', handleImageUpload);
+        filterSelect.addEventListener('change', updateFilterControls);
+        
+        paramSlider.addEventListener('input', () => {
+            paramValue.textContent = parseFloat(paramSlider.value).toFixed(1);
+            if (currentMode) {
+                applySelectedFilter();
+            }
+        });
+
+        // --- Initial state setup ---
+        clearCanvas(sourceCtx);
+        clearCanvas(filteredCtx);
+        setupMode('upload');
+        updateFilterControls();
+
+    </script>
+</body>
+</html>
